@@ -4,7 +4,7 @@ import "net/http"
 import "sync/atomic"
 import "fmt"
 import "encoding/json"
-
+import "strings"
 
 type apiConfig struct {
     fileserverHits atomic.Int32
@@ -53,6 +53,22 @@ func (cfg *apiConfig) resetFileserverHitsHandler(w http.ResponseWriter, r *http.
          w.Write([]byte("Hits counter reset"))
     }
 
+var profaneWords = map[string]bool{
+    "kerfuffle": true,
+    "sharbert": true,
+    "fornax": true,
+}    
+
+func censorProfaneWords(body string) string {
+    words := strings.Fields(body)
+    for i, word := range words {
+        if profaneWords[strings.ToLower(word)] {
+            words[i] = "****"
+        }
+    }
+    return strings.Join(words, " ")
+    
+}
 func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
     type Chirp struct {
         Body string `json:"body"`
@@ -68,10 +84,13 @@ func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
         respondWithError(w, 400, "Chirp is too long")
         return
     }
+
+    cleanedBody := censorProfaneWords(params.Body)
+    
     type returnValues struct {
-        Valid bool `json:"valid"`
+        CleanedBody string `json:"cleaned_body,omitempty"`
     }
-    respondWithJSON(w, 200, returnValues{Valid: true})
+    respondWithJSON(w, 200, returnValues{CleanedBody: cleanedBody})
 }
 
 func main() {
