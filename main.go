@@ -11,12 +11,14 @@ import (
 
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
+	"time"
 
 	"github.com/jacobrluttrull/chirpy/internal/database"
 )
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
+	platform      string
 }
 
 func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
@@ -56,6 +58,15 @@ func (cfg *apiConfig) fileserverHitsHandler(w http.ResponseWriter, r *http.Reque
 }
 
 func (cfg *apiConfig) resetFileserverHitsHandler(w http.ResponseWriter, r *http.Request) {
+    if cfg.platform != "dev" {
+        respondWithError(w, 403, "Forbidden")
+        return
+    }
+    err := cfg.db.DeleteAllUsers(r.Context())
+    if err != nil {
+        respondWithError(w, 500, "Failed to delete users")
+        return
+    }
 	cfg.fileserverHits.Store(0)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -100,6 +111,36 @@ func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
 	respondWithJSON(w, 200, returnValues{CleanedBody: cleanedBody})
 }
 
+func (cfg *apiConfig) handlerCreateUser (w http.ResponseWriter, r *http.Request) {
+    type request struct {
+        Email string `json:"email"`
+    }
+    decoder := json.NewDecoder(r.Body)
+    params := request{}
+    err := decoder.Decode(&params)
+    if err != nil {
+        respondWithError(w, 400, "Something went wrong")
+        return
+    }
+    user, err := cfg.db.CreateUser(r.Context(), params.Email)
+    if err != nil {
+        respondWithError(w, 500, "Failed to create user")
+        return
+    }
+    type returnValues struct {
+        ID        string    `json:"id"`
+        CreatedAt time.Time `json:"created_at"`
+        UpdatedAt time.Time `json:"updated_at"`
+        Email     string    `json:"email"`
+    }
+    respondWithJSON(w, 201, returnValues{
+        ID:        user.ID.String(),
+        CreatedAt: user.CreatedAt,
+        UpdatedAt: user.UpdatedAt,
+        Email:     user.Email,
+    })
+}
+
 func main() {
 	godotenv.Load()
 
@@ -111,9 +152,12 @@ func main() {
 	defer db.Close()
 	dbQueries := database.New(db)
 
+	platform := os.Getenv("PLATFORM")
+
 	mux := http.NewServeMux()
 	apiCfg := &apiConfig{
 		db: dbQueries,
+		platform: platform,
 	}
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app/", http.FileServer(http.Dir(".")))))
 	mux.Handle("/api/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir("assets"))))
@@ -125,6 +169,7 @@ func main() {
 	mux.HandleFunc("GET /admin/metrics", apiCfg.fileserverHitsHandler)
 	mux.HandleFunc("POST /admin/reset", apiCfg.resetFileserverHitsHandler)
 	mux.HandleFunc("POST /api/validate_chirp", handlerValidateChirp)
+	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
 
 	srv := &http.Server{
 		Addr:    ":8080",
