@@ -6,19 +6,20 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
 	"sync/atomic"
+
+	"time"
 
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
-	"time"
 
 	"github.com/jacobrluttrull/chirpy/internal/database"
 )
+
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
-	platform      string
+	platform       string
 }
 
 func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
@@ -58,87 +59,49 @@ func (cfg *apiConfig) fileserverHitsHandler(w http.ResponseWriter, r *http.Reque
 }
 
 func (cfg *apiConfig) resetFileserverHitsHandler(w http.ResponseWriter, r *http.Request) {
-    if cfg.platform != "dev" {
-        respondWithError(w, 403, "Forbidden")
-        return
-    }
-    err := cfg.db.DeleteAllUsers(r.Context())
-    if err != nil {
-        respondWithError(w, 500, "Failed to delete users")
-        return
-    }
+	if cfg.platform != "dev" {
+		respondWithError(w, 403, "Forbidden")
+		return
+	}
+	err := cfg.db.DeleteAllUsers(r.Context())
+	if err != nil {
+		respondWithError(w, 500, "Failed to delete users")
+		return
+	}
 	cfg.fileserverHits.Store(0)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Hits counter reset"))
 }
 
-var profaneWords = map[string]bool{
-	"kerfuffle": true,
-	"sharbert":  true,
-	"fornax":    true,
-}
-
-func censorProfaneWords(body string) string {
-	words := strings.Fields(body)
-	for i, word := range words {
-		if profaneWords[strings.ToLower(word)] {
-			words[i] = "****"
-		}
-	}
-	return strings.Join(words, " ")
-}
-
-func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
-	type Chirp struct {
-		Body string `json:"body"`
+func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) {
+	type request struct {
+		Email string `json:"email"`
 	}
 	decoder := json.NewDecoder(r.Body)
-	params := Chirp{}
+	params := request{}
 	err := decoder.Decode(&params)
 	if err != nil {
 		respondWithError(w, 400, "Something went wrong")
 		return
 	}
-	if len(params.Body) > 140 {
-		respondWithError(w, 400, "Chirp is too long")
+	user, err := cfg.db.CreateUser(r.Context(), params.Email)
+	if err != nil {
+		respondWithError(w, 500, "Failed to create user")
 		return
 	}
-	cleanedBody := censorProfaneWords(params.Body)
 	type returnValues struct {
-		CleanedBody string `json:"cleaned_body,omitempty"`
+		ID        string    `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Email     string    `json:"email"`
 	}
-	respondWithJSON(w, 200, returnValues{CleanedBody: cleanedBody})
-}
-
-func (cfg *apiConfig) handlerCreateUser (w http.ResponseWriter, r *http.Request) {
-    type request struct {
-        Email string `json:"email"`
-    }
-    decoder := json.NewDecoder(r.Body)
-    params := request{}
-    err := decoder.Decode(&params)
-    if err != nil {
-        respondWithError(w, 400, "Something went wrong")
-        return
-    }
-    user, err := cfg.db.CreateUser(r.Context(), params.Email)
-    if err != nil {
-        respondWithError(w, 500, "Failed to create user")
-        return
-    }
-    type returnValues struct {
-        ID        string    `json:"id"`
-        CreatedAt time.Time `json:"created_at"`
-        UpdatedAt time.Time `json:"updated_at"`
-        Email     string    `json:"email"`
-    }
-    respondWithJSON(w, 201, returnValues{
-        ID:        user.ID.String(),
-        CreatedAt: user.CreatedAt,
-        UpdatedAt: user.UpdatedAt,
-        Email:     user.Email,
-    })
+	respondWithJSON(w, 201, returnValues{
+		ID:        user.ID.String(),
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+	})
 }
 
 func main() {
@@ -156,7 +119,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	apiCfg := &apiConfig{
-		db: dbQueries,
+		db:       dbQueries,
 		platform: platform,
 	}
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app/", http.FileServer(http.Dir(".")))))
@@ -168,8 +131,8 @@ func main() {
 	})
 	mux.HandleFunc("GET /admin/metrics", apiCfg.fileserverHitsHandler)
 	mux.HandleFunc("POST /admin/reset", apiCfg.resetFileserverHitsHandler)
-	mux.HandleFunc("POST /api/validate_chirp", handlerValidateChirp)
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
+	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
 
 	srv := &http.Server{
 		Addr:    ":8080",
