@@ -13,6 +13,7 @@ import (
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 
+	"github.com/jacobrluttrull/chirpy/internal/auth"
 	"github.com/jacobrluttrull/chirpy/internal/database"
 )
 
@@ -76,7 +77,8 @@ func (cfg *apiConfig) resetFileserverHitsHandler(w http.ResponseWriter, r *http.
 
 func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) {
 	type request struct {
-		Email string `json:"email"`
+		Password string `json:"password"`
+		Email    string `json:"email"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	params := request{}
@@ -85,7 +87,19 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 		respondWithError(w, 400, "Something went wrong")
 		return
 	}
-	user, err := cfg.db.CreateUser(r.Context(), params.Email)
+	if params.Password == "" {
+		respondWithError(w, 400, "Password is required")
+		return
+	}
+	hashedPassword, err := auth.HashPassword(params.Password)
+	if err != nil {
+		respondWithError(w, 500, "Failed to create user")
+		return
+	}
+	user, err := cfg.db.CreateUser(r.Context(), database.CreateUserParams{
+		Email:          params.Email,
+		HashedPassword: hashedPassword,
+	})
 	if err != nil {
 		respondWithError(w, 500, "Failed to create user")
 		return
@@ -97,6 +111,46 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 		Email     string    `json:"email"`
 	}
 	respondWithJSON(w, 201, returnValues{
+		ID:        user.ID.String(),
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+	})
+}
+
+func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
+	type request struct {
+		Password string `json:"password"`
+		Email    string `json:"email"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	params := request{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		respondWithError(w, 400, "Something went wrong")
+		return
+	}
+	user, err := cfg.db.GetUserEmail(r.Context(), params.Email)
+	if err != nil {
+		respondWithError(w, 401, "Invalid credentials")
+		return
+	}
+	match, err := auth.CheckPasswordHash(params.Password, user.HashedPassword)
+	if err != nil {
+		respondWithError(w, 500, "Something went wrong")
+		return
+	}
+	if !match {
+		respondWithError(w, 401, "Invalid credentials")
+		return
+	}
+	type returnValues struct {
+		ID        string    `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Email     string    `json:"email"`
+	}
+	respondWithJSON(w, 200, returnValues{
 		ID:        user.ID.String(),
 		CreatedAt: user.CreatedAt,
 		UpdatedAt: user.UpdatedAt,
@@ -135,6 +189,7 @@ func main() {
 	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
 	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetAllChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChirp)
+	mux.HandleFunc("POST /api/login", apiCfg.handlerLogin)
 
 	srv := &http.Server{
 		Addr:    ":8080",
