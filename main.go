@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"sync/atomic"
@@ -21,6 +22,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
 	platform       string
+	jwtSecret      string
 }
 
 func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
@@ -120,8 +122,9 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 
 func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 	type request struct {
-		Password string `json:"password"`
-		Email    string `json:"email"`
+		Password         string `json:"password"`
+		Email            string `json:"email"`
+		ExpiresInSeconds int    `json:"expires_in_seconds"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	params := request{}
@@ -144,22 +147,45 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, 401, "Invalid credentials")
 		return
 	}
+
+	const maxExpiration = time.Hour
+	expiresIn := maxExpiration
+	if params.ExpiresInSeconds > 0 {
+		requested := time.Duration(params.ExpiresInSeconds) * time.Second
+		if requested < maxExpiration {
+			expiresIn = requested
+		}
+	}
+
+	token, err := auth.MakeJWT(user.ID, cfg.jwtSecret, expiresIn)
+	if err != nil {
+		respondWithError(w, 500, "Failed to create token")
+		return
+	}
+
 	type returnValues struct {
 		ID        string    `json:"id"`
 		CreatedAt time.Time `json:"created_at"`
 		UpdatedAt time.Time `json:"updated_at"`
 		Email     string    `json:"email"`
+		Token     string    `json:"token"`
 	}
 	respondWithJSON(w, 200, returnValues{
 		ID:        user.ID.String(),
 		CreatedAt: user.CreatedAt,
 		UpdatedAt: user.UpdatedAt,
 		Email:     user.Email,
+		Token:     token,
 	})
 }
 
 func main() {
 	godotenv.Load()
+
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		log.Fatal("JWT_SECRET environment variable not set")
+	}
 
 	dbURL := os.Getenv("DB_URL")
 	db, err := sql.Open("postgres", dbURL)
@@ -173,8 +199,9 @@ func main() {
 
 	mux := http.NewServeMux()
 	apiCfg := &apiConfig{
-		db:       dbQueries,
-		platform: platform,
+		db:        dbQueries,
+		platform:  platform,
+		jwtSecret: jwtSecret,
 	}
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app/", http.FileServer(http.Dir(".")))))
 	mux.Handle("/api/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir("assets"))))
