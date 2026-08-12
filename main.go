@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/jacobrluttrull/chirpy/internal/polka"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 
@@ -37,6 +38,7 @@ func main() {
 	loginCfg := &login.Config{DB: dbQueries, JWTSecret: jwtSecret}
 	refreshCfg := &refresh.Config{DB: dbQueries, JWTSecret: jwtSecret}
 	chirpsCfg := &chirps.Config{DB: dbQueries, JWTSecret: jwtSecret}
+	polkaCfg := &polka.Config{DB: dbQueries, APIKey: os.Getenv("POLKA_KEY")}
 
 	mux := http.NewServeMux()
 	mux.Handle("/app/", adminCfg.MiddlewareMetricsInc(http.StripPrefix("/app/", http.FileServer(http.Dir(".")))))
@@ -57,6 +59,7 @@ func main() {
 	mux.HandleFunc("GET /api/chirps", chirpsCfg.HandlerGetAllChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", chirpsCfg.HandlerGetChirp)
 	mux.HandleFunc("DELETE /api/chirps/{chirpID}", chirpsCfg.HandlerDeleteChirp)
+	mux.HandleFunc("POST /api/polka/webhooks", polkaCfg.HandlerChirpyRedWebhooks)
 
 	srv := &http.Server{
 		Addr:    ":8080",
