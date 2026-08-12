@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,6 +19,7 @@ import (
 type Store interface {
 	CreateChirp(ctx context.Context, arg database.CreateChirpParams) (database.Chirp, error)
 	GetAllChirps(ctx context.Context) ([]database.Chirp, error)
+	GetChirpsByAuthor(ctx context.Context, userID uuid.UUID) ([]database.Chirp, error)
 	GetChirp(ctx context.Context, id uuid.UUID) (database.Chirp, error)
 	DeleteChirp(ctx context.Context, id uuid.UUID) error
 }
@@ -85,11 +87,31 @@ func (cfg *Config) HandlerCreateChirp(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *Config) HandlerGetAllChirps(w http.ResponseWriter, r *http.Request) {
-	chirps, err := cfg.DB.GetAllChirps(r.Context())
+	authorIDString := r.URL.Query().Get("author_id")
+
+	var chirps []database.Chirp
+	var err error
+	if authorIDString != "" {
+		authorID, parseErr := uuid.Parse(authorIDString)
+		if parseErr != nil {
+			response.Error(w, http.StatusBadRequest, "Invalid author_id")
+			return
+		}
+		chirps, err = cfg.DB.GetChirpsByAuthor(r.Context(), authorID)
+	} else {
+		chirps, err = cfg.DB.GetAllChirps(r.Context())
+	}
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, "Something went wrong")
 		return
 	}
+
+	if r.URL.Query().Get("sort") == "desc" {
+		sort.Slice(chirps, func(i, j int) bool {
+			return chirps[i].CreatedAt.After(chirps[j].CreatedAt)
+		})
+	}
+
 	result := make([]returnValues, len(chirps))
 	for i, chirp := range chirps {
 		result[i] = chirpToReturnValues(chirp)

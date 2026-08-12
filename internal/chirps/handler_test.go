@@ -17,17 +17,20 @@ import (
 )
 
 type fakeStore struct {
-	createChirp   database.Chirp
-	createErr     error
-	allChirps     []database.Chirp
-	allErr        error
-	singleChirp   database.Chirp
-	singleErr     error
-	createCalled  bool
-	createdParams database.CreateChirpParams
-	deleteErr     error
-	deleteCalled  bool
-	deletedID     uuid.UUID
+	createChirp    database.Chirp
+	createErr      error
+	allChirps      []database.Chirp
+	allErr         error
+	byAuthorChirps []database.Chirp
+	byAuthorErr    error
+	byAuthorID     uuid.UUID
+	singleChirp    database.Chirp
+	singleErr      error
+	createCalled   bool
+	createdParams  database.CreateChirpParams
+	deleteErr      error
+	deleteCalled   bool
+	deletedID      uuid.UUID
 }
 
 func (f *fakeStore) CreateChirp(ctx context.Context, arg database.CreateChirpParams) (database.Chirp, error) {
@@ -38,6 +41,11 @@ func (f *fakeStore) CreateChirp(ctx context.Context, arg database.CreateChirpPar
 
 func (f *fakeStore) GetAllChirps(ctx context.Context) ([]database.Chirp, error) {
 	return f.allChirps, f.allErr
+}
+
+func (f *fakeStore) GetChirpsByAuthor(ctx context.Context, userID uuid.UUID) ([]database.Chirp, error) {
+	f.byAuthorID = userID
+	return f.byAuthorChirps, f.byAuthorErr
 }
 
 func (f *fakeStore) GetChirp(ctx context.Context, id uuid.UUID) (database.Chirp, error) {
@@ -196,6 +204,88 @@ func TestHandlerGetAllChirps(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "one") || !strings.Contains(w.Body.String(), "two") {
 		t.Fatalf("expected body to contain both chirps, got %q", w.Body.String())
+	}
+}
+
+func TestHandlerGetAllChirpsSortDesc(t *testing.T) {
+	now := time.Now()
+	store := &fakeStore{allChirps: []database.Chirp{
+		{Body: "oldest", CreatedAt: now},
+		{Body: "newest", CreatedAt: now.Add(time.Hour)},
+	}}
+	cfg := &chirps.Config{DB: store}
+
+	req := httptest.NewRequest("GET", "/api/chirps?sort=desc", nil)
+	w := httptest.NewRecorder()
+
+	cfg.HandlerGetAllChirps(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if strings.Index(body, "newest") > strings.Index(body, "oldest") {
+		t.Fatalf("expected newest chirp before oldest in descending order, got %q", body)
+	}
+}
+
+func TestHandlerGetAllChirpsSortAscDefault(t *testing.T) {
+	now := time.Now()
+	store := &fakeStore{allChirps: []database.Chirp{
+		{Body: "oldest", CreatedAt: now},
+		{Body: "newest", CreatedAt: now.Add(time.Hour)},
+	}}
+	cfg := &chirps.Config{DB: store}
+
+	req := httptest.NewRequest("GET", "/api/chirps", nil)
+	w := httptest.NewRecorder()
+
+	cfg.HandlerGetAllChirps(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if strings.Index(body, "oldest") > strings.Index(body, "newest") {
+		t.Fatalf("expected oldest chirp before newest in ascending order, got %q", body)
+	}
+}
+
+func TestHandlerGetAllChirpsFilteredByAuthor(t *testing.T) {
+	authorID := uuid.New()
+	store := &fakeStore{
+		allChirps:      []database.Chirp{{Body: "one"}, {Body: "two"}},
+		byAuthorChirps: []database.Chirp{{Body: "mine", UserID: authorID}},
+	}
+	cfg := &chirps.Config{DB: store}
+
+	req := httptest.NewRequest("GET", "/api/chirps?author_id="+authorID.String(), nil)
+	w := httptest.NewRecorder()
+
+	cfg.HandlerGetAllChirps(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+	if store.byAuthorID != authorID {
+		t.Fatalf("expected GetChirpsByAuthor to be called with %v, got %v", authorID, store.byAuthorID)
+	}
+	if !strings.Contains(w.Body.String(), "mine") || strings.Contains(w.Body.String(), "one") {
+		t.Fatalf("expected body to contain only the author's chirp, got %q", w.Body.String())
+	}
+}
+
+func TestHandlerGetAllChirpsInvalidAuthorID(t *testing.T) {
+	store := &fakeStore{allChirps: []database.Chirp{{Body: "one"}}}
+	cfg := &chirps.Config{DB: store}
+
+	req := httptest.NewRequest("GET", "/api/chirps?author_id=not-a-uuid", nil)
+	w := httptest.NewRecorder()
+
+	cfg.HandlerGetAllChirps(w, req)
+
+	if w.Code != 400 {
+		t.Fatalf("expected status 400, got %d", w.Code)
 	}
 }
 
