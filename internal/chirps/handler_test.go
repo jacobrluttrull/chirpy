@@ -25,6 +25,9 @@ type fakeStore struct {
 	singleErr     error
 	createCalled  bool
 	createdParams database.CreateChirpParams
+	deleteErr     error
+	deleteCalled  bool
+	deletedID     uuid.UUID
 }
 
 func (f *fakeStore) CreateChirp(ctx context.Context, arg database.CreateChirpParams) (database.Chirp, error) {
@@ -39,6 +42,12 @@ func (f *fakeStore) GetAllChirps(ctx context.Context) ([]database.Chirp, error) 
 
 func (f *fakeStore) GetChirp(ctx context.Context, id uuid.UUID) (database.Chirp, error) {
 	return f.singleChirp, f.singleErr
+}
+
+func (f *fakeStore) DeleteChirp(ctx context.Context, id uuid.UUID) error {
+	f.deleteCalled = true
+	f.deletedID = id
+	return f.deleteErr
 }
 
 // signTestToken builds a JWT the same way auth.MakeJWT does, so the handler
@@ -235,5 +244,85 @@ func TestHandlerGetChirpSuccess(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "hello") {
 		t.Fatalf("expected body to contain the chirp, got %q", w.Body.String())
+	}
+}
+
+func TestHandlerDeleteChirpNoAuthHeader(t *testing.T) {
+	cfg := &chirps.Config{DB: &fakeStore{}, JWTSecret: "test-secret"}
+
+	req := httptest.NewRequest("DELETE", "/api/chirps/"+uuid.New().String(), nil)
+	req.SetPathValue("chirpID", uuid.New().String())
+	w := httptest.NewRecorder()
+
+	cfg.HandlerDeleteChirp(w, req)
+
+	if w.Code != 401 {
+		t.Fatalf("expected status 401, got %d", w.Code)
+	}
+}
+
+func TestHandlerDeleteChirpNotFound(t *testing.T) {
+	store := &fakeStore{singleErr: sql.ErrNoRows}
+	cfg := &chirps.Config{DB: store, JWTSecret: "test-secret"}
+	token := signTestToken(t, uuid.New(), "test-secret", time.Hour)
+
+	req := httptest.NewRequest("DELETE", "/api/chirps/"+uuid.New().String(), nil)
+	req.SetPathValue("chirpID", uuid.New().String())
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+
+	cfg.HandlerDeleteChirp(w, req)
+
+	if w.Code != 404 {
+		t.Fatalf("expected status 404, got %d", w.Code)
+	}
+	if store.deleteCalled {
+		t.Fatal("expected DeleteChirp not to be called for a missing chirp")
+	}
+}
+
+func TestHandlerDeleteChirpNotOwner(t *testing.T) {
+	ownerID := uuid.New()
+	store := &fakeStore{singleChirp: database.Chirp{ID: uuid.New(), UserID: ownerID}}
+	cfg := &chirps.Config{DB: store, JWTSecret: "test-secret"}
+	token := signTestToken(t, uuid.New(), "test-secret", time.Hour)
+
+	req := httptest.NewRequest("DELETE", "/api/chirps/"+uuid.New().String(), nil)
+	req.SetPathValue("chirpID", uuid.New().String())
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+
+	cfg.HandlerDeleteChirp(w, req)
+
+	if w.Code != 403 {
+		t.Fatalf("expected status 403, got %d", w.Code)
+	}
+	if store.deleteCalled {
+		t.Fatal("expected DeleteChirp not to be called when the chirp isn't owned by the caller")
+	}
+}
+
+func TestHandlerDeleteChirpSuccess(t *testing.T) {
+	userID := uuid.New()
+	chirpID := uuid.New()
+	store := &fakeStore{singleChirp: database.Chirp{ID: chirpID, UserID: userID}}
+	cfg := &chirps.Config{DB: store, JWTSecret: "test-secret"}
+	token := signTestToken(t, userID, "test-secret", time.Hour)
+
+	req := httptest.NewRequest("DELETE", "/api/chirps/"+chirpID.String(), nil)
+	req.SetPathValue("chirpID", chirpID.String())
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+
+	cfg.HandlerDeleteChirp(w, req)
+
+	if w.Code != 204 {
+		t.Fatalf("expected status 204, got %d", w.Code)
+	}
+	if !store.deleteCalled {
+		t.Fatal("expected DeleteChirp to be called")
+	}
+	if store.deletedID != chirpID {
+		t.Fatalf("expected chirp %v to be deleted, got %v", chirpID, store.deletedID)
 	}
 }

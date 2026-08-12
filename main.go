@@ -33,7 +33,7 @@ func main() {
 	dbQueries := database.New(db)
 
 	adminCfg := &admin.Config{DB: dbQueries, Platform: os.Getenv("PLATFORM")}
-	usersCfg := &users.Config{DB: dbQueries}
+	usersCfg := &users.Config{DB: dbQueries, JWTSecret: jwtSecret}
 	loginCfg := &login.Config{DB: dbQueries, JWTSecret: jwtSecret}
 	refreshCfg := &refresh.Config{DB: dbQueries, JWTSecret: jwtSecret}
 	chirpsCfg := &chirps.Config{DB: dbQueries, JWTSecret: jwtSecret}
@@ -49,12 +49,14 @@ func main() {
 	mux.HandleFunc("GET /admin/metrics", adminCfg.FileserverHitsHandler)
 	mux.HandleFunc("POST /admin/reset", adminCfg.ResetFileserverHitsHandler)
 	mux.HandleFunc("POST /api/users", usersCfg.HandlerCreateUser)
+	mux.HandleFunc("PUT /api/users", usersCfg.HandlerUpdateUser)
 	mux.HandleFunc("POST /api/login", loginCfg.HandlerLogin)
 	mux.HandleFunc("POST /api/refresh", refreshCfg.HandlerRefresh)
 	mux.HandleFunc("POST /api/revoke", refreshCfg.HandlerRevoke)
 	mux.HandleFunc("POST /api/chirps", chirpsCfg.HandlerCreateChirp)
 	mux.HandleFunc("GET /api/chirps", chirpsCfg.HandlerGetAllChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", chirpsCfg.HandlerGetChirp)
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", chirpsCfg.HandlerDeleteChirp)
 
 	srv := &http.Server{
 		Addr:    ":8080",

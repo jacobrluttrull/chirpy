@@ -19,6 +19,7 @@ type Store interface {
 	CreateChirp(ctx context.Context, arg database.CreateChirpParams) (database.Chirp, error)
 	GetAllChirps(ctx context.Context) ([]database.Chirp, error)
 	GetChirp(ctx context.Context, id uuid.UUID) (database.Chirp, error)
+	DeleteChirp(ctx context.Context, id uuid.UUID) error
 }
 
 type Config struct {
@@ -107,4 +108,38 @@ func (cfg *Config) HandlerGetChirp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.JSON(w, http.StatusOK, chirpToReturnValues(chirp))
+}
+
+func (cfg *Config) HandlerDeleteChirp(w http.ResponseWriter, r *http.Request) {
+	tokenString, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		response.Error(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	userID, err := auth.ValidateJWT(tokenString, cfg.JWTSecret)
+	if err != nil {
+		response.Error(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	chirp, err := cfg.DB.GetChirp(r.Context(), uuid.MustParse(r.PathValue("chirpID")))
+	if errors.Is(err, sql.ErrNoRows) {
+		response.Error(w, http.StatusNotFound, "Chirp not found")
+		return
+	}
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "Something went wrong")
+		return
+	}
+	if chirp.UserID != userID {
+		response.Error(w, http.StatusForbidden, "Forbidden")
+		return
+	}
+
+	err = cfg.DB.DeleteChirp(r.Context(), chirp.ID)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "Something went wrong")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

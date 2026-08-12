@@ -11,12 +11,30 @@ import (
 	"github.com/jacobrluttrull/chirpy/internal/response"
 )
 
-type Creator interface {
+type Store interface {
 	CreateUser(ctx context.Context, arg database.CreateUserParams) (database.User, error)
+	UpdateUser(ctx context.Context, arg database.UpdateUserParams) (database.User, error)
 }
 
 type Config struct {
-	DB Creator
+	DB        Store
+	JWTSecret string
+}
+
+type userResponse struct {
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
+}
+
+func toUserResponse(user database.User) userResponse {
+	return userResponse{
+		ID:        user.ID.String(),
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+	}
 }
 
 func (cfg *Config) HandlerCreateUser(w http.ResponseWriter, r *http.Request) {
@@ -48,16 +66,44 @@ func (cfg *Config) HandlerCreateUser(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusInternalServerError, "Failed to create user")
 		return
 	}
-	type returnValues struct {
-		ID        string    `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Email     string    `json:"email"`
+	response.JSON(w, http.StatusCreated, toUserResponse(user))
+}
+
+func (cfg *Config) HandlerUpdateUser(w http.ResponseWriter, r *http.Request) {
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		response.Error(w, http.StatusUnauthorized, "Unauthorized")
+		return
 	}
-	response.JSON(w, http.StatusCreated, returnValues{
-		ID:        user.ID.String(),
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
+	userID, err := auth.ValidateJWT(token, cfg.JWTSecret)
+	if err != nil {
+		response.Error(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	type parameters struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err = decoder.Decode(&params)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "Something went wrong")
+		return
+	}
+	hashedPassword, err := auth.HashPassword(params.Password)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "Failed to update user")
+		return
+	}
+	user, err := cfg.DB.UpdateUser(r.Context(), database.UpdateUserParams{
+		Email:          params.Email,
+		HashedPassword: hashedPassword,
+		ID:             userID,
 	})
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "Failed to update user")
+		return
+	}
+	response.JSON(w, http.StatusOK, toUserResponse(user))
 }
